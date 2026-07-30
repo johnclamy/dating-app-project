@@ -1,0 +1,60 @@
+# ==========================================
+# Root & General Exclusions
+# ==========================================
+.DS_Store
+*.log
+.vscode/
+.idea/
+*.swp
+*.swo
+.env
+.env.*
+!.env.example
+
+# ==========================================
+# Backend: FastAPI / Python
+# ==========================================
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+*.venv
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# FastAPI / Database / Local storage
+*.db
+*.sqlite3
+/backend/uploads/
+/backend/static/
+
+# ==========================================
+# Frontend: Vite + React (Node / JavaScript)
+# ==========================================
+# Dependencies
+/frontend/node_modules/
+
+# Vite build output
+/frontend/dist/
+/frontend/dist-ssr/
+
+# Framework & Tooling cache
+/frontend/.vite/
+/frontend/.eslintcache
+
+# Package manager logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
