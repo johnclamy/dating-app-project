@@ -6,8 +6,8 @@ from model.lookingFor import LookingFor
 from model.location import Location
 
 
-# Create the list of users - to be import later from a db
-users = [
+# Data list used here for testing. Will be replaced with a database connection later.
+_users = [
     User(
         id=uuid.UUID("123e4567-e89b-12d3-a456-426614174003"),
         first_name="Diana",
@@ -61,3 +61,52 @@ users = [
         updated_at=datetime(2026, 7, 15, 10, 30, 0, tzinfo=timezone.utc)
     )
 ]
+
+
+# CRUD operations for users
+
+def get_all() -> list[User]:
+    """Retrieve all users."""
+    return _users
+
+
+def get_by_id(user_id: uuid.UUID) -> User | None:
+    """Retrieve a user by ID."""
+    for user in _users:
+        if user.id == user_id:
+            return user
+    return None
+
+
+def create(user: User) -> User:
+    """Create a new user."""
+    _users.append(user)
+    return user
+
+
+def modify(user_id: uuid.UUID, updated_user: User) -> User | None:
+    """Partially modify a user."""
+    for index, user in enumerate(_users):
+        if user.id == user_id:
+            _users[index] = updated_user
+            return updated_user
+    return None
+
+
+def replace(user_id: uuid.UUID, new_user: User) -> User | None:
+    """Completely replace a user."""
+    for index, user in enumerate(_users):
+        if user.id == user_id:
+            _users[index] = new_user
+            return new_user
+    return None
+
+
+def delete(user_id: uuid.UUID) -> bool:
+    """Delete a user."""
+    for index, user in enumerate(_users):
+        if user.id == user_id:
+            del _users[index]
+            return True
+    return False
+    
