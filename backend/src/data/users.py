@@ -1,112 +1,127 @@
-import uuid
-from datetime import date, datetime, timezone
+import sqlite3
+from backend.src.model.location import Location
 from model.users import User
-from model.gender import Gender
-from model.lookingFor import LookingFor
-from model.location import Location
 
 
-# Data list used here for testing. Will be replaced with a database connection later.
-_users = [
-    User(
-        id=uuid.UUID("123e4567-e89b-12d3-a456-426614174003"),
-        first_name="Diana",
-        last_name="Evans",
-        date_of_birth=date(1998, 7, 20),  # Age 28
-        email="diana.e@example.com",
-        gender=Gender.FEMALE,
-        looking_for=LookingFor.RELATIONSHIP,
-        location=Location(latitude=-33.8688, longitude=151.2093), # Sydney
-        bio="Beach lover and amateur photographer. Looking for someone to explore the coast with.",
-        created_at=datetime(2026, 7, 28, 18, 45, 0, tzinfo=timezone.utc),
-        updated_at=datetime(2026, 7, 28, 18, 45, 0, tzinfo=timezone.utc)
-    ),
-    User(
-        id=uuid.UUID("123e4567-e89b-12d3-a456-426614174002"),
-        first_name="Charlie",
-        last_name="Davis",
-        date_of_birth=date(2002, 1, 15),  # Age 24
-        email="charlie.d@example.com",
-        gender=Gender.NON_BINARY,
-        looking_for=LookingFor.FRIENDSHIP,
-        location=Location(latitude=35.6895, longitude=139.6917), # Tokyo
-        bio=None,  # Bio is optional
-        created_at=datetime(2026, 8, 1, 8, 0, 0, tzinfo=timezone.utc),
-        updated_at=datetime(2026, 8, 1, 8, 0, 0, tzinfo=timezone.utc)
-    ),
-    User(
-        id=uuid.UUID("123e4567-e89b-12d3-a456-426614174001"),
-        first_name="Bob",
-        last_name="Johnson",
-        date_of_birth=date(1990, 11, 30),  # Age 35
-        email="bob.j@example.com",
-        gender=Gender.MALE,
-        looking_for=LookingFor.CASUAL,
-        location=Location(latitude=51.5074, longitude=-0.1278), # London
-        bio="Musician and foodie. Let's grab a pint.",
-        created_at=datetime(2026, 7, 20, 14, 0, 0, tzinfo=timezone.utc),
-        updated_at=datetime(2026, 7, 22, 9, 15, 0, tzinfo=timezone.utc) # Updated profile later
-    ),
-    User(
-        id=uuid.UUID("123e4567-e89b-12d3-a456-426614174000"),
-        first_name="Alice",
-        last_name="Smith",
-        date_of_birth=date(1995, 4, 12),  # Age 31
-        email="alice.smith@example.com",
-        gender=Gender.FEMALE,
-        looking_for=LookingFor.RELATIONSHIP,
-        location=Location(latitude=40.7128, longitude=-74.0060), # New York
-        bio="Love hiking, weekend coffee runs, and trying new restaurants.",
-        created_at=datetime(2026, 7, 15, 10, 30, 0, tzinfo=timezone.utc),
-        updated_at=datetime(2026, 7, 15, 10, 30, 0, tzinfo=timezone.utc)
+DB_NAME = "cupids_bow.db"
+
+
+# Connect to your SQLite database
+conn = sqlite3.connect(DB_NAME)
+
+# Enable extension loading on the connection
+conn.enable_load_extension(True)
+
+# Load the SpatiaLite library
+# (Linux usually automatically resolves 'mod_spatialite' if installed via apt)
+# We will Load the exact file path found in Linux Mint 22
+try:
+    conn.load_extension("/usr/lib/x86_64-linux-gnu/mod_spatialite.so")
+    print("Extension loaded via direct path!")
+except sqlite3.OperationalError:
+    try:
+        conn.load_extension("mod_spatialite")
+        print("Extension loaded via system shortcut!")
+    except sqlite3.OperationalError as e:
+        print(f"Failed to load SpatiaLite extension: {e}")
+        conn.close()
+        raise
+
+# Initialize spatial metadata tables
+curs = conn.cursor()
+curs.execute("SELECT InitSpatialMetaData(1);") # '1' accelerates initialization on modern SpatiaLite
+
+
+def init():
+    curs.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            first_name TEXT NOT NULL,
+            last_name TEXT NOT NULL,
+            date_of_birth TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE,
+            gender TEXT NOT NULL,
+            looking_for TEXT NOT NULL,
+            latitude REAL NOT NULL,
+            longitude REAL NOT NULL,
+            bio TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    ''')
+
+
+def row_to_model(row: tuple) -> User:
+    id,first_name, last_name, date_of_birth, email, gender, looking_for, latitude, longitude, bio, created_at, updated_at = row
+    return User(
+        id=id,
+        first_name=first_name,
+        last_name=last_name,
+        date_of_birth=date_of_birth,
+        email=email,
+        gender=gender,
+        looking_for=looking_for,
+        location=Location(latitude=latitude, longitude=longitude),
+        bio=bio,
+        created_at=created_at,
+        updated_at=updated_at
     )
-]
 
 
-# CRUD operations for users
-
-def get_all() -> list[User]:
-    """Retrieve all users."""
-    return _users
+def model_to_dict(user: User) -> dict:
+    return user.dict()
 
 
-def get_by_id(user_id: uuid.UUID) -> User | None:
-    """Retrieve a user by ID."""
-    for user in _users:
-        if user.id == user_id:
-            return user
+def get_user_by_id(user_id: str) -> User | None:
+    curs.execute("SELECT * FROM users WHERE id = :user_id", {"user_id": user_id})
+    row = curs.fetchone()
+    if row:
+        return row_to_model(row)
     return None
 
 
-def create(user: User) -> User:
-    """Create a new user."""
-    _users.append(user)
+def get_all_users() -> list[User]:
+    curs.execute("SELECT * FROM users")
+    rows = curs.fetchall()
+    return [row_to_model(row) for row in rows]
+
+
+def create_user(user: User) -> User:
+    user_dict = model_to_dict(user)
+    curs.execute('''
+        INSERT INTO users (id, first_name, last_name, date_of_birth, email, gender, looking_for, latitude, longitude, bio, created_at, updated_at)
+        VALUES (:id, :first_name, :last_name, :date_of_birth, :email, :gender, :looking_for, :latitude, :longitude, :bio, :created_at, :updated_at)
+    ''', user_dict)
+    conn.commit()
     return user
 
 
-def modify(user_id: uuid.UUID, updated_user: User) -> User | None:
-    """Partially modify a user."""
-    for index, user in enumerate(_users):
-        if user.id == user_id:
-            _users[index] = updated_user
-            return updated_user
-    return None
+def modify(user: User) -> User:
+    user_dict = model_to_dict(user)
+    curs.execute('''
+        UPDATE users
+        SET first_name = :first_name, last_name = :last_name, date_of_birth = :date_of_birth, email = :email, gender = :gender, looking_for = :looking_for, latitude = :latitude, longitude = :longitude, bio = :bio, updated_at = :updated_at
+        WHERE id = :id
+    ''', user_dict)
+    conn.commit()
+    return user
 
 
-def replace(user_id: uuid.UUID, new_user: User) -> User | None:
-    """Completely replace a user."""
-    for index, user in enumerate(_users):
-        if user.id == user_id:
-            _users[index] = new_user
-            return new_user
-    return None
+def replace(user: User) -> User:
+    user_dict = model_to_dict(user)
+    curs.execute('''
+        UPDATE users
+        SET first_name = :first_name, last_name = :last_name, date_of_birth = :date_of_birth, email = :email, gender = :gender, looking_for = :looking_for, latitude = :latitude, longitude = :longitude, bio = :bio, created_at = :created_at, updated_at = :updated_at
+        WHERE id = :id
+    ''', user_dict)
+    conn.commit()
+    return user
 
 
-def delete(user_id: uuid.UUID) -> bool:
-    """Delete a user."""
-    for index, user in enumerate(_users):
-        if user.id == user_id:
-            del _users[index]
-            return True
-    return False
-    
+def delete_user(user_id: str) -> bool:
+    curs.execute("DELETE FROM users WHERE id = :user_id", {"user_id": user_id})
+    conn.commit()
+    return curs.rowcount > 0
+
+
+conn.close()
