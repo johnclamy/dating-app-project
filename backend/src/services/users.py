@@ -5,29 +5,29 @@ import uuid
 
 def get_all() -> list[User]:
     """Retrieve all users."""
-    return data.get_all()
+    return data.get_all_users()
 
 
 def get_by_id(user_id: uuid.UUID) -> User | None:
     """Retrieve a user by ID."""
-    return data.get_by_id(user_id)
+    return data.get_user_by_id(user_id)
 
 
 def create(user: User) -> User:
     """Create a new user."""
-    return data.create(user)
+    return data.create_user(user)
 
 
-def replace(user_id: uuid.UUID, new_user: User) -> User | None:
+def replace(user: User) -> User | None:
     """Completely replace a user."""
-    return data.replace(user_id, new_user)
+    return data.replace(user)
 
 
-def modify(user_id: uuid.UUID, updated_user: User) -> User | None:
+def modify(user: User) -> User | None:
     """Partially modify a user."""
-    return data.modify(user_id, updated_user)
+    return data.modify(user)
 
 
 def delete(user_id: uuid.UUID) -> bool:
     """Delete a user."""
-    return data.delete(user_id)
+    return data.delete_user(user_id)
