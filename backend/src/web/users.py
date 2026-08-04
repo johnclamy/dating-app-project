@@ -22,14 +22,9 @@ def create(user: User) -> User:
     return service.create(user)
 
 
-@router.patch("/{user_id}")
-def modify(user_id: str, user: User) -> User | None:
-    return service.modify(uuid.UUID(user_id), user)
-
-
 @router.put("/{user_id}")
-def replace(user_id: str, user: User) -> User | None:
-    return service.replace(uuid.UUID(user_id), user)
+def update(user_id: str, user: User) -> User | None:
+    return service.update(uuid.UUID(user_id), user)
 
 
 @router.delete("/{user_id}")
