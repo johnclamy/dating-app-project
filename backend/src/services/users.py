@@ -18,14 +18,9 @@ def create(user: User) -> User:
     return data.create_user(user)
 
 
-def replace(user: User) -> User | None:
-    """Completely replace a user."""
-    return data.replace(user)
-
-
-def modify(user: User) -> User | None:
-    """Partially modify a user."""
-    return data.modify(user)
+def update(user: User) -> User:
+    """Update an existing user."""
+    return data.update_user(user)
 
 
 def delete(user_id: uuid.UUID) -> bool:
