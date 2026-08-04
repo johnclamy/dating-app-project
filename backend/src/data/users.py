@@ -55,7 +55,7 @@ def _row_to_user(row: dict) -> User:
     )
 
 
-def get_all_users() -> List[User]:
+def get_all_users() -> List[User] | list[None] | None:
     with get_db_connection() as conn:
         curs = conn.cursor()
         # ST_X extracts Longitude, ST_Y extracts Latitude from the SpatiaLite POINT
