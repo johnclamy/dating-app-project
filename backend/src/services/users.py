@@ -18,7 +18,7 @@ def create(user: User) -> User:
     return data.create_user(user)
 
 
-def update(user: User) -> User:
+def update(user_id: uuid.UUID, user: User) -> User:
     """Update an existing user."""
     return data.update_user(user)
 
