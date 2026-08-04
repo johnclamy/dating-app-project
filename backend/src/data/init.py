@@ -2,9 +2,13 @@
 
 import os
 import sqlite3
+import logging
 from pathlib import Path
 from contextlib import contextmanager
 from typing import Generator
+
+
+logger = logging.getLogger(__name__)
 
 
 def get_db_path() -> str:
@@ -22,13 +26,17 @@ def init_spatialite_once():
     Initialize SpatiaLite metadata safely.
     Call this exactly ONCE at application startup (e.g., in main.py).
     """
+    logger.info(f"Initializing SpatiaLite at {get_db_path()}")
+
     db_path = get_db_path()
     conn = sqlite3.connect(db_path)
     conn.enable_load_extension(True)
     
     try:
+        logger.info("Loading SpatiaLite extension...")
         conn.load_extension("/usr/lib/x86_64-linux-gnu/mod_spatialite.so")
     except sqlite3.OperationalError:
+        logger.info("Failed to load SpatiaLite extension from standard path. Trying alternative path...")
         conn.load_extension("mod_spatialite")
     
     cursor = conn.cursor()
@@ -39,6 +47,7 @@ def init_spatialite_once():
     except sqlite3.OperationalError as e:
         # Safely ignore the error if the tables already exist
         if "already exists" not in str(e).lower():
+            logger.error("Error occurred while initializing SpatiaLite metadata: %s", e)
             raise
     finally:
         conn.close()
