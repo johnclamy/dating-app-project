@@ -1,4 +1,5 @@
 import uuid
+import sqlite3
 from datetime import date, datetime
 from typing import List, Optional
 from model.location import Location
@@ -85,27 +86,34 @@ def get_user_by_id(user_id: uuid.UUID) -> Optional[User]:
 
 def create_user(user: User) -> User:
     with get_db_connection() as conn:
-        curs = conn.cursor()
-        # MakePoint takes (longitude, latitude, SRID). SRID 4326 is standard GPS.
-        curs.execute('''
-            INSERT INTO users (id, first_name, last_name, date_of_birth, email, gender, looking_for, location, bio, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, MakePoint(?, ?, 4326), ?, ?, ?)
-        ''', (
-            str(user.id),
-            user.first_name,
-            user.last_name,
-            user.date_of_birth.isoformat(),
-            user.email,
-            user.gender.value,
-            user.looking_for.value,
-            user.location.longitude,  # X
-            user.location.latitude,   # Y
-            user.bio,
-            user.created_at.isoformat(),
-            user.updated_at.isoformat()
-        ))
-        conn.commit()
-        return user 
+        try:
+            curs = conn.cursor()
+            # MakePoint takes (longitude, latitude, SRID). SRID 4326 is standard GPS.
+            curs.execute('''
+                INSERT INTO users (id, first_name, last_name, date_of_birth, email, gender, looking_for, location, bio, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, MakePoint(?, ?, 4326), ?, ?, ?)
+            ''', (
+                str(user.id),
+                user.first_name,
+                user.last_name,
+                user.date_of_birth.isoformat(),
+                user.email,
+                user.gender.value,
+                user.looking_for.value,
+                user.location.longitude,  # X
+                user.location.latitude,   # Y
+                user.bio,
+                user.created_at.isoformat(),
+                user.updated_at.isoformat()
+            ))
+            conn.commit()
+            return user 
+        except sqlite3.IntegrityError as e:
+            # Handle unique constraint violations (e.g., duplicate email)
+            if "UNIQUE constraint failed" in str(e):
+                raise ValueError(f"User with email {user.email} already exists.")
+            else:
+                raise
 
   
 def update_user(user: User) -> User:
