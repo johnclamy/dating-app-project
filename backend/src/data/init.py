@@ -1,8 +1,9 @@
-"""Initialize and manage SQLite database connections"""
+"""Initialize and manage SQLite database connections with SpatiaLite support."""
 
 import os
 import sqlite3
 import logging
+import ctypes.util
 from pathlib import Path
 from contextlib import contextmanager
 from typing import Generator
@@ -13,65 +14,74 @@ logger = logging.getLogger(__name__)
 
 def get_db_path() -> str:
     """Determine the database file path and ensure the directory exists."""
-    # This file is in backend/src/data/
-    # parents[2] resolves up to the backend/ directory
     top_dir = Path(__file__).resolve().parents[2]
     db_dir = top_dir / "db"
     db_dir.mkdir(parents=True, exist_ok=True)
     return os.getenv("CUPIDS_BOW", str(db_dir / "cupids_bow.db"))
 
 
-def init_spatialite_once():
-    """
-    Initialize SpatiaLite metadata safely.
-    Call this exactly ONCE at application startup (e.g., in main.py).
-    """
-    logger.info(f"Initializing SpatiaLite at {get_db_path()}")
-
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+def _load_spatialite(conn: sqlite3.Connection) -> None:
+    """Attempt to load SpatiaLite extension using cross-platform fallbacks."""
     conn.enable_load_extension(True)
     
-    try:
-        logger.info("Loading SpatiaLite extension...")
-        conn.load_extension("/usr/lib/x86_64-linux-gnu/mod_spatialite.so")
-    except sqlite3.OperationalError:
-        logger.info("Failed to load SpatiaLite extension from standard path. Trying alternative path...")
-        conn.load_extension("mod_spatialite")
+    # Common extension names across operating systems
+    candidates = [
+        "mod_spatialite",
+        ctypes.util.find_library("spatialite"),
+        "/usr/lib/x86_64-linux-gnu/mod_spatialite.so",
+        "/usr/local/lib/mod_spatialite.dylib",  # macOS Homebrew fallback
+    ]
     
-    cursor = conn.cursor()
-    try:
-        # Attempt to initialize metadata
-        cursor.execute("SELECT InitSpatialMetaData(1);")
-        conn.commit()
-    except sqlite3.OperationalError as e:
-        # Safely ignore the error if the tables already exist
-        if "already exists" not in str(e).lower():
-            logger.error("Error occurred while initializing SpatiaLite metadata: %s", e)
-            raise
-    finally:
-        conn.close()
+    for candidate in filter(None, candidates):
+        try:
+            conn.load_extension(candidate)
+            return
+        except sqlite3.OperationalError:
+            continue
+            
+    logger.error("Failed to load SpatiaLite extension from all candidate paths.")
+    raise RuntimeError("SpatiaLite extension could not be loaded.")
+
+
+def init_spatialite_once() -> None:
+    """
+    Initialize SpatiaLite metadata safely and configure DB performance pragmas.
+    Call this ONCE at application startup.
+    """
+    db_path = get_db_path()
+    logger.info("Initializing SpatiaLite metadata at %s", db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        _load_spatialite(conn)
+        
+        # Performance Pragmas: WAL mode for concurrency, foreign keys enabled
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA foreign_keys=ON;")
+        
+        cursor = conn.cursor()
+        try:
+            # InitSpatialMetaData(1) uses transaction safety
+            cursor.execute("SELECT InitSpatialMetaData(1);")
+        except sqlite3.OperationalError as e:
+            if "already exists" in str(e).lower() or "table" in str(e).lower():
+                logger.debug("SpatiaLite metadata tables already present.")
+            else:
+                logger.error("Error initializing SpatiaLite metadata: %s", e)
+                raise
 
 
 @contextmanager
 def get_db_connection() -> Generator[sqlite3.Connection, None, None]:
     """
-    Context manager to yield a fresh database connection per request.
-    This prevents "closed database" errors in async/multi-threaded environments.
+    Context manager yielding a thread-safe connection with auto-commit on success.
     """
-    conn = sqlite3.connect(get_db_path())
-    conn.enable_load_extension(True)
+    conn = sqlite3.connect(get_db_path(), timeout=10.0)
+    conn.row_factory = sqlite3.Row
     
-    # Enables dict-like access to columns (e.g., row["id"] instead of row[0])
-    conn.row_factory = sqlite3.Row 
+    _load_spatialite(conn)
     
     try:
-        conn.load_extension("/usr/lib/x86_64-linux-gnu/mod_spatialite.so")
-    except sqlite3.OperationalError:
-        conn.load_extension("mod_spatialite")
-        
-    try:
-        yield conn
+        with conn:  # Enforces automatic COMMIT on success, ROLLBACK on exception
+            yield conn
     finally:
-        # Always close the connection when the request is done
         conn.close()
