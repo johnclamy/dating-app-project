@@ -1,230 +1,156 @@
-import uuid
-from datetime import date
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import EmailStr, Field, field_validator
-from sqlalchemy.exc import IntegrityError
-from sqlmodel import SQLModel, Session, select
-# --- Move get_session to dependencies.py to avoid circular imports with main.py ---
-from dependencies import get_session
-from model.gender import Gender
-from model.lookingFor import LookingFor
-from model.location import Location
-from model.users import User
+import hashlib
+import secrets
+from uuid import UUID
+
+from fastapi import APIRouter, HTTPException, Query, status
+from sqlmodel import Session, select
+
+from ..model.users import User, UserCreate, UserRead, UserUpdate, utcnow
+from .dependencies import SessionDep, UserDep
+
+router = APIRouter(prefix="/users", tags=["users"])
+
+PBKDF2_ITERATIONS = 200_000
 
 
-router = APIRouter()
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        bytes.fromhex(salt),
+        PBKDF2_ITERATIONS,
+    ).hex()
+
+    return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt}${digest}"
 
 
-# ---------------------------------------------------------------------------
-# API Request/Response Schemas
-# ---------------------------------------------------------------------------
+def username_exists(
+    session: Session,
+    username: str,
+    exclude_user_id: UUID | None = None,
+) -> bool:
+    stmt = select(User).where(User.username == username)
 
-class UserCreate(SQLModel):
-    """Request body for creating a new user."""
-    first_name: str = Field(..., min_length=1, max_length=100)
-    last_name: str = Field(..., min_length=1, max_length=100)
-    date_of_birth: date = Field(
-        ..., description="Must be at least 18 years old"
-    )
-    email: EmailStr = Field(..., max_length=255)
-    gender: Gender
-    looking_for: LookingFor
-    latitude: float = Field(..., ge=-90.0, le=90.0, description="Y coordinate")
-    longitude: float = Field(..., ge=-180.0, le=180.0, description="X coordinate")
-    bio: Optional[str] = Field(default=None, max_length=500)
-    # NOTE: You must add `password_hash` to your User model.
-    # This field is write-only and never returned in responses.
-    password: str = Field(..., min_length=8, max_length=128)
+    if exclude_user_id is not None:
+        stmt = stmt.where(User.id != exclude_user_id)
 
-    @field_validator("date_of_birth")
-    @classmethod
-    def must_be_adult(cls, v: date) -> date:
-        """Ensure the user is at least 18 years old."""
-        # Approximate 18 years; leap-day safe
-        age_cutoff = date.today().replace(year=date.today().year - 18)
-        if v > age_cutoff:
-            raise ValueError("Must be at least 18 years old")
-        return v
+    return session.exec(stmt).first() is not None
 
 
-class UserRead(SQLModel):
-    """Response body for reading a user."""
-    id: uuid.UUID
-    first_name: str
-    last_name: str
-    date_of_birth: date
-    email: EmailStr
-    gender: Gender
-    looking_for: LookingFor
-    # Uses the @property location on the User model
-    location: Location
-    bio: Optional[str] = None
-    created_at: Optional[date] = None  # type: ignore[assignment]
+def email_exists(
+    session: Session,
+    email: str,
+    exclude_user_id: UUID | None = None,
+) -> bool:
+    stmt = select(User).where(User.email == email)
 
+    if exclude_user_id is not None:
+        stmt = stmt.where(User.id != exclude_user_id)
 
-class UserUpdate(SQLModel):
-    """Request body for partial updates (PATCH)."""
-    first_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
-    last_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
-    date_of_birth: Optional[date] = Field(
-        default=None, description="Must be at least 18 years old"
-    )
-    email: Optional[EmailStr] = Field(default=None, max_length=255)
-    gender: Optional[Gender] = None
-    looking_for: Optional[LookingFor] = None
-    latitude: Optional[float] = Field(default=None, ge=-90.0, le=90.0)
-    longitude: Optional[float] = Field(default=None, ge=-180.0, le=180.0)
-    bio: Optional[str] = Field(default=None, max_length=500)
+    return session.exec(stmt).first() is not None
 
-    @field_validator("date_of_birth")
-    @classmethod
-    def must_be_adult(cls, v: Optional[date]) -> Optional[date]:
-        if v is None:
-            return v
-        age_cutoff = date.today().replace(year=date.today().year - 18)
-        if v > age_cutoff:
-            raise ValueError("Must be at least 18 years old")
-        return v
-
-
-# ---------------------------------------------------------------------------
-# CRUD Endpoints
-# ---------------------------------------------------------------------------
 
 @router.post(
-    "/",
+    "",
     response_model=UserRead,
     status_code=status.HTTP_201_CREATED,
-    summary="Create a new user profile",
 )
-def create_user(
-    user_in: UserCreate,
-    db: Session = Depends(get_session),
-) -> User:
-    """Create a new user profile after checking email uniqueness."""
-    # Build the DB model from the request.
-    # We pop `password` because the User table stores `password_hash`, not plain text.
-    user_data = user_in.model_dump(exclude={"password"})
-    db_user = User.model_validate(user_data)
-
-    # TODO: Hash the password before storing.
-    # Example: db_user.password_hash = hash_password(user_in.password)
-    # For now, this is a placeholder to remind you to wire in your auth layer.
-    # db_user.password_hash = "placeholder"
-
-    try:
-        db.add(db_user)
-        db.commit()
-        db.refresh(db_user)
-    except IntegrityError:
-        db.rollback()
+def create_user(payload: UserCreate, session: SessionDep) -> User:
+    if username_exists(session, payload.username):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username already exists",
         )
 
-    return db_user
-
-
-@router.get(
-    "/",
-    response_model=List[UserRead],
-    summary="List user profiles",
-)
-def read_users(
-    offset: int = Query(0, ge=0, description="Number of records to skip"),
-    limit: int = Query(100, ge=1, le=500, description="Max records to return (hard cap: 500)"),
-    db: Session = Depends(get_session),
-) -> List[User]:
-    """Retrieve a paginated list of users."""
-    users = db.exec(select(User).offset(offset).limit(limit)).all()
-    return users # type: ignore
-
-
-@router.get(
-    "/{user_id}",
-    response_model=UserRead,
-    summary="Get a single user profile",
-)
-def read_user(
-    user_id: uuid.UUID,
-    db: Session = Depends(get_session),
-) -> User:
-    """Get a single user profile by UUID."""
-    user = db.get(User, user_id)
-    if not user:
+    if email_exists(session, payload.email):
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already exists",
         )
+
+    user = User(
+        username=payload.username,
+        email=payload.email,
+        full_name=payload.full_name,
+        hashed_password=hash_password(payload.password),
+    )
+
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+
     return user
 
 
-@router.patch(
-    "/{user_id}",
-    response_model=UserRead,
-    summary="Update user profile",
-)
+@router.get("", response_model=list[UserRead])
+def list_users(
+    session: SessionDep,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
+) -> list[User]:
+    stmt = select(User).offset(offset).limit(limit)
+    users = session.exec(stmt).all()
+    return list(users)
+
+
+@router.get("/{user_id}", response_model=UserRead)
+def read_user(user: UserDep) -> User:
+    return user
+
+
+@router.patch("/{user_id}", response_model=UserRead)
 def update_user(
-    user_id: uuid.UUID,
-    user_in: UserUpdate,
-    db: Session = Depends(get_session),
+    payload: UserUpdate,
+    user: UserDep,
+    session: SessionDep,
 ) -> User:
-    """Partially update a user profile."""
-    db_user = db.get(User, user_id)
-    if not db_user:
+    data = payload.model_dump(exclude_unset=True)
+
+    password = data.pop("password", None)
+    username = data.get("username")
+    email = data.get("email")
+
+    if username is not None and username_exists(
+        session,
+        username,
+        exclude_user_id=user.id,
+    ):
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username already exists",
         )
 
-    update_data = user_in.model_dump(exclude_unset=True)
-
-    # Prevent email collisions on update
-    new_email = update_data.get("email")
-    if new_email and new_email != db_user.email:
-        existing = db.exec(select(User).where(User.email == new_email)).first()
-        if existing:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already registered",
-            )
-
-    for key, value in update_data.items():
-        setattr(db_user, key, value)
-
-    try:
-        db.add(db_user)
-        db.commit()
-        db.refresh(db_user)
-    except IntegrityError:
-        db.rollback()
+    if email is not None and email_exists(
+        session,
+        email,
+        exclude_user_id=user.id,
+    ):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already exists",
         )
 
-    return db_user
+    for field_name, value in data.items():
+        setattr(user, field_name, value)
+
+    if password is not None:
+        user.hashed_password = hash_password(password)
+
+    user.updated_at = utcnow()
+
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+
+    return user
 
 
 @router.delete(
     "/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete user profile",
 )
-def delete_user(
-    user_id: uuid.UUID,
-    db: Session = Depends(get_session),
-) -> None:
-    """Delete a user profile permanently."""
-    user = db.get(User, user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-
-    db.delete(user)
-    db.commit()
-    return None
+def delete_user(user: UserDep, session: SessionDep) -> None:
+    session.delete(user)
+    session.commit()
